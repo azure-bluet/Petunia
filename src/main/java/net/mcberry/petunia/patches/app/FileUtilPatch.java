@@ -14,6 +14,40 @@ import java.util.regex.Pattern;
 public class FileUtilPatch implements IClassPatcher {
     static final String target = "net/minecraft/util/FileUtil";
 
+    /**
+     * Guards against every assumption this patch makes. A miss in any of them is silent, because the
+     * patch replaces a whole method body and rewrites nothing else, so a wrong shape produces a valid
+     * class with wrong behaviour rather than an error.
+     * <ul>
+     *   <li>{@code <clinit>} and {@code isPathPartPortable} must exist - they are the two injection
+     *       points.</li>
+     *   <li>{@code RESERVED_WINDOWS_FILENAMES_NEOFORGE} must not exist yet, or the added field would
+     *       be a duplicate.</li>
+     *   <li>{@code RESERVED_WINDOWS_FILENAMES} must still exist, since {@link #choose()} reads it
+     *       reflectively and would throw a NullPointerException on every call if it were gone.</li>
+     *   <li>{@code isPathPartPortable} must take exactly one {@code String} and return {@code boolean},
+     *       because the replacement body is {@code ALOAD 0} + {@code portable(String)} + {@code IRETURN}.
+     *       A different descriptor would silently call the wrong thing or misread the stack.</li>
+     * </ul>
+     */
+    @Override
+    public boolean validate(ClassNode cn) {
+        boolean hasClinit = false, hasOriginalPattern = false;
+        MethodNode ippp = null;
+        for (MethodNode mn : cn.methods) {
+            if (mn.name.equals("<clinit>")) hasClinit = true;
+            else if (mn.name.equals("isPathPartPortable")) ippp = mn;
+        }
+        for (FieldNode fn : cn.fields) {
+            if (fn.name.equals("RESERVED_WINDOWS_FILENAMES_NEOFORGE")) return false;
+            if (fn.name.equals("RESERVED_WINDOWS_FILENAMES")) hasOriginalPattern = true;
+        }
+        if (!hasClinit || ippp == null || !hasOriginalPattern) return false;
+        // The fixed replacement body only fits this exact shape.
+        return ippp.desc.equals("(Ljava/lang/String;)Z")
+                && (ippp.access & Opcodes.ACC_STATIC) != 0;
+    }
+
     @Override
     public void patch(ClassNode cn) {
         // NeoForge: RESERVED_WINDOWS_FILENAMES_NEOFORGE =
@@ -29,10 +63,6 @@ public class FileUtilPatch implements IClassPatcher {
                 clinit = mn;
             else if (mn.name.equals("isPathPartPortable"))
                 ippp = mn;
-        if (clinit == null)
-            throw new RuntimeException("<clinit> not found in net.minecraft.util.FileUtil. Maybe outdated patch?");
-        if (ippp == null)
-            throw new RuntimeException("isPathPartPortable not found in net.minecraft.util.FileUtil. Maybe outdated patch?");
         var iter = clinit.instructions.iterator();
         // Initialize RESERVED_WINDOWS_FILENAMES_NEOFORGE
         iter.add(new LdcInsnNode(".*\\.|(?:CON|PRN|AUX|NUL|CLOCK\\$|CONIN\\$|CONOUT\\$|(?:COM|LPT)[¹²³0-9])(?:\\..*)?"));

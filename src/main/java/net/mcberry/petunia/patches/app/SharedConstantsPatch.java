@@ -14,21 +14,51 @@ import java.lang.management.ManagementFactory;
 public class SharedConstantsPatch implements IClassPatcher {
     static final String target = "net/minecraft/SharedConstants";
 
+    /**
+     * Guards against every assumption this patch makes.
+     * <ul>
+     *   <li>{@code IS_RUNNING_WITH_JDWP} must not exist yet, or the added field would be a
+     *       duplicate.</li>
+     *   <li>{@code <clinit>} must exist, since the field is initialised by injecting into its head.</li>
+     *   <li>{@code <clinit>} must contain exactly one {@code ResourceLeakDetector.setLevel(Level)}
+     *       call. That call is what gets redirected to {@link #setLevel} to install the "do not
+     *       override an explicitly configured level" guard, so the patch would silently lose half of
+     *       its behaviour if the call were renamed, removed, or split.</li>
+     * </ul>
+     */
     @Override
     public boolean validate(ClassNode cn) {
-        for (FieldNode fn : cn.fields) {
-            if (fn.name.equals("IS_RUNNING_WITH_JDWP")) {
+        for (FieldNode fn : cn.fields)
+            if (fn.name.equals("IS_RUNNING_WITH_JDWP"))
                 return false;
-            }
+
+        MethodNode clinit = null;
+        for (MethodNode mn : cn.methods)
+            if (mn.name.equals("<clinit>")) clinit = mn;
+        if (clinit == null) return false;
+
+        int setLevel = 0;
+        for (var insn : clinit.instructions) {
+            if (insn instanceof MethodInsnNode mi && isSetLevel(mi)) setLevel++;
         }
-        for (MethodNode mn : cn.methods) {
-            if (mn.name.equals("<clinit>")) {
-                return true;
-            }
-        }
-        return false;
+        return setLevel == 1;
     }
 
+    /**
+     * The {@code ResourceLeakDetector.setLevel} call the patch redirects. Matched on owner, name and
+     * descriptor so a different {@code setLevel} on another type is not retargeted by accident.
+     */
+    private static boolean isSetLevel(MethodInsnNode mi) {
+        return mi.getOpcode() == Opcodes.INVOKESTATIC
+                && mi.owner.equals("io/netty/util/ResourceLeakDetector")
+                && mi.name.equals("setLevel")
+                && mi.desc.equals("(Lio/netty/util/ResourceLeakDetector$Level;)V");
+    }
+
+    /**
+     * Applies the patch. Assumes {@link #validate(ClassNode)} accepted this class: {@code <clinit>}
+     * and the {@code ResourceLeakDetector.setLevel} call it redirects are taken as given.
+     */
     @Override
     public void patch(ClassNode cn) {
         final String myname = ReflectionUtil.getInternalName(SharedConstantsPatch.class);
@@ -46,9 +76,6 @@ public class SharedConstantsPatch implements IClassPatcher {
                 break;
             }
         }
-        if (clinit == null)
-            throw new IllegalStateException(
-                    "<clinit> not found in net.minecraft.SharedConstants, re-do validate() in dev environment");
         var iter = clinit.instructions.iterator();
 
         // NeoForge: IS_RUNNING_WITH_JDWP = ManagementFactory.getRuntimeMXBean().getInputArguments()
@@ -71,8 +98,7 @@ public class SharedConstantsPatch implements IClassPatcher {
 
         while (iter.hasNext()) {
             var insn = iter.next();
-            if (insn instanceof MethodInsnNode meth && meth.owner.equals("io/netty/util/ResourceLeakDetector") && meth.name.equals("setLevel")) {
-                // Change the method owner
+            if (insn instanceof MethodInsnNode meth && isSetLevel(meth)) {
                 meth.owner = myname;
             }
         }
