@@ -4,9 +4,13 @@ import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.ClassWriter;
 import org.objectweb.asm.tree.ClassNode;
 
-import java.io.FileOutputStream;
-import java.io.IOException;
-
+/**
+ * A patch for exactly one class.
+ * <p>
+ * Implementations are discovered by {@link SimplePatchLoader} from a package of the loader's own
+ * jar. The target is normally taken from {@link Patch}; override {@link #getTarget()} for cases the
+ * annotation cannot express.
+ */
 public interface IClassPatcher {
     /**
      * Patch byte code of a class.
@@ -45,32 +49,40 @@ public interface IClassPatcher {
     }
 
     /**
-     * Debug method
+     * Check that this patch still fits the target class, i.e. that it has not gone stale.
+     * <p>
+     * This is a guard, not a transformation: it must not modify the class. Assert whatever the patch
+     * relies on and return false when it no longer holds - a method that was renamed, a field that is
+     * gone, an injection point that moved, or a member this patch adds that vanilla has since grown
+     * itself.
+     * <p>
+     * It is only called by {@link PatcherDebugger}, deliberately. Verifying has a cost and the answer
+     * cannot change while a single run is in progress, so the game does not pay for it; the dump is
+     * where a stale patch should be reported.
+     * <p>
+     * Override either this method or {@link #validate(ClassNode)}; both work, because the default of
+     * each delegates to the other's shape. {@link PatcherDebugger} calls this one, so a patch that
+     * overrides only the {@code ClassNode} form still gets invoked.
+     *
+     * @param buffer The unpatched target class bytes
+     * @return true if the patch can still be applied, false if it is stale
      */
-    default void debug(byte[] buffer) {
-        String fn = "../../patched_classes/" + this.getTarget().replace('/', '.') + ".class";
-        try {
-            var os = new FileOutputStream(fn);
-            os.write(buffer);
-            os.close();
-        } catch (IOException e) {
-            throw new RuntimeException(e);
-        }
+    default boolean validate(byte[] buffer) {
+        ClassNode cn = new ClassNode();
+        new ClassReader(buffer).accept(cn, 0);
+        return validate(cn);
     }
 
     /**
-     * Debug method
+     * Check that this patch still fits the target class, using an already parsed node.
+     * <p>
+     * Prefer this form: it avoids re-parsing the class. As with {@link #validate(byte[])}, override
+     * either one, not both - they are two views of the same guard.
+     *
+     * @param cn The unpatched target class
+     * @return true if the patch can still be applied, false if it is stale
      */
-    default void debug(ClassWriter cw) {
-        debug(cw.toByteArray());
-    }
-
-    /**
-     * Debug method
-     */
-    default void debug(ClassNode cn) {
-        ClassWriter cw = new ClassWriter(0);
-        cn.accept(cw);
-        debug(cw.toByteArray());
+    default boolean validate(ClassNode cn) {
+        return true;
     }
 }

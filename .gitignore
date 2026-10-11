@@ -6,3 +6,8 @@ run/
 mods/
 berry.zip
 config.json
+
+external/
+patched_classes/
+# Deepseek keeps running some unknown commands and generates this thing I don't know how to stop it
+logs/

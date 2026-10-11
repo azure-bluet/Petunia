@@ -15,6 +15,21 @@ public class SharedConstantsPatch implements IClassPatcher {
     static final String target = "net/minecraft/SharedConstants";
 
     @Override
+    public boolean validate(ClassNode cn) {
+        for (FieldNode fn : cn.fields) {
+            if (fn.name.equals("IS_RUNNING_WITH_JDWP")) {
+                return false;
+            }
+        }
+        for (MethodNode mn : cn.methods) {
+            if (mn.name.equals("<clinit>")) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    @Override
     public void patch(ClassNode cn) {
         final String myname = ReflectionUtil.getInternalName(SharedConstantsPatch.class);
 
@@ -24,13 +39,16 @@ public class SharedConstantsPatch implements IClassPatcher {
                 "IS_RUNNING_WITH_JDWP", "Z", "Z", null
         ));
 
-        // <clinit> method
         MethodNode clinit = null;
-        for (MethodNode mn : cn.methods)
-            if (mn.name.equals("<clinit>"))
+        for (MethodNode mn : cn.methods) {
+            if (mn.name.equals("<clinit>")) {
                 clinit = mn;
+                break;
+            }
+        }
         if (clinit == null)
-            throw new RuntimeException("<clinit> not found in net.minecraft.SharedConstants. Maybe outdated patch?");
+            throw new IllegalStateException(
+                    "<clinit> not found in net.minecraft.SharedConstants, re-do validate() in dev environment");
         var iter = clinit.instructions.iterator();
 
         // NeoForge: IS_RUNNING_WITH_JDWP = ManagementFactory.getRuntimeMXBean().getInputArguments()
